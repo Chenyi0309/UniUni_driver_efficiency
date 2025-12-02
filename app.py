@@ -43,17 +43,15 @@ def load_saved_map():
             return {}
         result = {}
         for k, v in data.items():
-            # key 可能是数字也可能是字符串（比如 "UPS"）
             try:
                 key = int(k)
-            except:
+            except ValueError:
                 key = k
             result[key] = list({int(d) for d in v})
         return result
     return {}
 
 def save_route_map(route_map):
-    # 写文件时把 key 都变成字符串，driver id 变成 int 列表
     serializable = {}
     for k, v in route_map.items():
         serializable[str(k)] = [int(d) for d in v]
@@ -62,7 +60,6 @@ def save_route_map(route_map):
 
 SAVED_MAP = load_saved_map()
 
-# 合并默认映射和用户映射
 ROUTE_MAP = DEFAULT_ROUTE_MAP.copy()
 for r, drivers in SAVED_MAP.items():
     if r in ROUTE_MAP:
@@ -85,19 +82,17 @@ if st.sidebar.button("保存映射"):
         except ValueError:
             st.sidebar.error("Driver ID 必须是数字")
         else:
-            # route 可以是数字也可以是字符串
             try:
                 route_id = int(new_route)
             except ValueError:
                 route_id = new_route
 
-            # 更新 SAVED_MAP，然后写回文件
             key = str(route_id)
             existing = SAVED_MAP.get(key, [])
             if driver_id not in existing:
                 existing.append(driver_id)
             SAVED_MAP[key] = existing
-            # 和 DEFAULT_ROUTE_MAP 合并后再保存
+
             temp_map = DEFAULT_ROUTE_MAP.copy()
             for rk, rv in SAVED_MAP.items():
                 try:
@@ -146,25 +141,20 @@ if uploaded_file.name.endswith(".csv"):
 else:
     df = pd.read_excel(uploaded_file)
 
-# 列名统一处理：转为字符串再 strip，避免 .strip() 报错
 df.columns = [str(c).strip() for c in df.columns]
 
 # ==========================
 # 6. 关键列自动识别
 # ==========================
-# 司机列
 driver_candidates = [c for c in df.columns if "driver" in c.lower()]
 driver_col = driver_candidates[0] if driver_candidates else df.columns[0]
 
-# To be delivered/Total 列
 tbd_candidates = [c for c in df.columns if "to be" in c.lower() or "delivered/total" in c.lower()]
 tbd_col = tbd_candidates[0] if tbd_candidates else df.columns[-5]
 
-# Completion Rate 列
 comp_candidates = [c for c in df.columns if "completion" in c.lower()]
 comp_col = comp_candidates[0] if comp_candidates else df.columns[-4]
 
-# Inactive Time 列
 inactive_candidates = [c for c in df.columns if "inactive" in c.lower()]
 inactive_col = inactive_candidates[0] if inactive_candidates else df.columns[-1]
 
@@ -176,13 +166,11 @@ st.dataframe(df.head(), use_container_width=True)
 # ==========================
 # 7. 字段解析
 # ==========================
-# 7.1 To be delivered / Total
 split = df[tbd_col].astype(str).str.split("/", expand=True)
 df["to_be"] = pd.to_numeric(split[0], errors="coerce").fillna(0).astype(int)
 df["total"] = pd.to_numeric(split[1], errors="coerce").fillna(0).astype(int)
 df["delivered"] = df["total"] - df["to_be"]
 
-# 7.2 Completion Rate 数值化
 df["completion"] = (
     df[comp_col]
     .astype(str)
@@ -191,7 +179,6 @@ df["completion"] = (
 )
 df["completion"] = pd.to_numeric(df["completion"], errors="coerce")
 
-# 7.3 Inactive 时间转小时
 def time_to_hours(x):
     s = str(x)
     if ":" not in s:
@@ -207,7 +194,6 @@ def time_to_hours(x):
 
 df["inactive_hours"] = df[inactive_col].apply(time_to_hours)
 
-# 7.4 分配 Route
 def assign_route(driver):
     try:
         d = int(driver)
@@ -234,7 +220,20 @@ driver_group = (
     )
 )
 
-# 总体完成情况
+# —— 把 inactive_hours 转成 “Xh Ym Zs” 方便展示 ——
+def hours_to_hms(h):
+    if pd.isna(h):
+        return "N/A"
+    if h < 0:
+        h = 0
+    total_seconds = int(round(h * 3600))
+    H = total_seconds // 3600
+    M = (total_seconds % 3600) // 60
+    S = total_seconds % 60
+    return f"{H}h {M}m {S}s"
+
+driver_group["inactive_time_str"] = driver_group["inactive_hours"].apply(hours_to_hms)
+
 if driver_group["total"].sum() > 0:
     overall_completion = driver_group["delivered"].sum() / driver_group["total"].sum()
 else:
@@ -258,7 +257,12 @@ chart_route = (
         x=alt.X("completion_rate_pct:Q", title="Completion Rate (%)"),
         y=alt.Y(f"{driver_col}:N", sort="-x", title="Driver ID"),
         color=alt.Color("route:N", title="Route"),
-        tooltip=[driver_col, "route", "completion_rate_pct", "inactive_hours"]
+        tooltip=[
+            alt.Tooltip(driver_col, title="Driver ID"),
+            alt.Tooltip("route:N", title="Route"),
+            alt.Tooltip("completion_rate_pct:Q", title="Completion Rate"),
+            alt.Tooltip("inactive_time_str:N", title="Inactive Time"),
+        ]
     )
     .properties(height=600)
 )
@@ -266,11 +270,11 @@ chart_route = (
 st.altair_chart(chart_route, use_container_width=True)
 
 # ==========================
-# 10. 图表：普通完成率柱状图
+# 10. 图表：普通完成率柱状图（加上 route）
 # ==========================
 st.subheader("按司机完成率（普通柱状图）")
 
-simple_chart_data = driver_group[[driver_col, "completion_rate_pct"]].sort_values(
+simple_chart_data = driver_group[[driver_col, "route", "completion_rate_pct"]].sort_values(
     "completion_rate_pct", ascending=False
 )
 
@@ -280,7 +284,11 @@ chart_simple = (
     .encode(
         x=alt.X("completion_rate_pct:Q", title="Completion Rate (%)"),
         y=alt.Y(f"{driver_col}:N", sort="-x", title="Driver ID"),
-        tooltip=[driver_col, "completion_rate_pct"]
+        tooltip=[
+            alt.Tooltip(driver_col, title="Driver ID"),
+            alt.Tooltip("route:N", title="Route"),
+            alt.Tooltip("completion_rate_pct:Q", title="Completion Rate"),
+        ]
     )
     .properties(height=600)
 )
@@ -305,7 +313,7 @@ else:
     st.warning(f"共发现 {len(flagged)} 名异常司机：")
     display_cols = [
         driver_col, "route",
-        "completion_rate_pct", "inactive_hours",
+        "completion_rate_pct", "inactive_time_str",
         "delivered", "to_be", "total",
     ]
     st.dataframe(
