@@ -1,0 +1,9 @@
+# 不要上传公司导出的数据
+*.xlsx
+*.xls
+*.csv
+
+# python 常规
+__pycache__/
+*.pyc
+.env
