@@ -13,7 +13,7 @@ st.title("UniUni Driver Completion Dashboard")
 # ==============================
 # 1. 默认 分类 → Driver 映射
 # ==============================
-# 按你说的 4 类：
+# 4 大类：
 # DING DONG：Route 3 & 6
 # SPEEDY   ：Route 2, 9, 20
 # ANDY     ：Route 10, 11, 17, 19
@@ -50,6 +50,7 @@ DEFAULT_GROUP_MAP = {
     ],
 }
 
+# 下拉菜单显示内容（带 route 编号，方便记）
 GROUP_OPTIONS = [
     "DING DONG (3, 6)",
     "SPEEDY (2, 9, 20)",
@@ -57,13 +58,22 @@ GROUP_OPTIONS = [
     "Route 12 (12)",
 ]
 
-JSON_FILE = "group_map.json"  # 新的持久化文件名，避免和旧 route_map 混淆
+# 显示值 → 内部分类名
+DISPLAY_TO_INTERNAL = {
+    "DING DONG (3, 6)": "DING DONG",
+    "SPEEDY (2, 9, 20)": "SPEEDY",
+    "ANDY (10, 11, 17, 19)": "ANDY",
+    "Route 12 (12)": "Route 12",
+}
+
+JSON_FILE = "group_map.json"  # 持久化文件名（保存你新增的映射）
 
 
 # =========================================
 # 2. 加载 / 保存用户新增的 分类 映射
 # =========================================
 def load_saved_map():
+    """从本地 json 读取你自己加过的 driver → group 映射"""
     if os.path.exists(JSON_FILE):
         try:
             with open(JSON_FILE, "r") as f:
@@ -72,7 +82,6 @@ def load_saved_map():
             return {}
         result = {}
         for k, v in data.items():
-            # key 就是分类名（字符串），value 是 driver id 列表
             drivers = []
             for d in v:
                 try:
@@ -85,6 +94,7 @@ def load_saved_map():
 
 
 def save_group_map(group_map):
+    """把当前的 group_map 保存到 json"""
     serializable = {}
     for k, v in group_map.items():
         serializable[str(k)] = [int(d) for d in v]
@@ -108,7 +118,7 @@ for g, drivers in SAVED_MAP.items():
 st.sidebar.subheader("添加新的 Driver → 分类")
 
 new_driver = st.sidebar.text_input("Driver ID（例如 5201554）")
-new_group = st.sidebar.selectbox("分类", GROUP_OPTIONS)
+selected_display = st.sidebar.selectbox("分类", GROUP_OPTIONS)
 
 if st.sidebar.button("保存映射"):
     if new_driver:
@@ -117,13 +127,16 @@ if st.sidebar.button("保存映射"):
         except ValueError:
             st.sidebar.error("Driver ID 必须是数字")
         else:
-            # 更新 GROUP_MAP
+            # 转显示名为内部名
+            new_group = DISPLAY_TO_INTERNAL[selected_display]
+
+            # 更新运行时的 GROUP_MAP
             existing = GROUP_MAP.get(new_group, [])
             if driver_id not in existing:
                 existing.append(driver_id)
             GROUP_MAP[new_group] = existing
 
-            # 也更新 SAVED_MAP 并写入文件（只保存“增量”）
+            # 更新 SAVED_MAP 并写入文件（只保存增量）
             saved_existing = SAVED_MAP.get(new_group, [])
             if driver_id not in saved_existing:
                 saved_existing.append(driver_id)
