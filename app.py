@@ -50,7 +50,12 @@ DEFAULT_GROUP_MAP = {
     ],
 }
 
-GROUP_OPTIONS = ["DING DONG", "SPEEDY", "ANDY", "Route 12"]
+GROUP_OPTIONS = [
+    "DING DONG (3, 6)",
+    "SPEEDY (2, 9, 20)",
+    "ANDY (10, 11, 17, 19)",
+    "Route 12 (12)",
+]
 
 JSON_FILE = "group_map.json"  # 新的持久化文件名，避免和旧 route_map 混淆
 
