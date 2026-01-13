@@ -146,8 +146,21 @@ if st.sidebar.button("保存映射"):
         except ValueError:
             st.sidebar.error("Driver ID 必须是数字")
         else:
-            group_name = selected_group_display  # 直接用带路线号的名字作为标准名
+            group_name = selected_group_display  # 目标分组
 
+            # 1) 先从所有其他分组里移除这个 driver_id
+            for g, drivers in GROUP_MAP.items():
+                if g != group_name and driver_id in drivers:
+                    drivers.remove(driver_id)
+
+            for g, drivers in list(SAVED_MAP.items()):
+                if g != group_name and driver_id in drivers:
+                    drivers.remove(driver_id)
+                # 如果某个分组在 SAVED_MAP 里变成空列表，可以顺便删掉
+                if g != group_name and not drivers:
+                    del SAVED_MAP[g]
+
+            # 2) 再加到目标分组
             GROUP_MAP.setdefault(group_name, [])
             if driver_id not in GROUP_MAP[group_name]:
                 GROUP_MAP[group_name].append(driver_id)
@@ -156,8 +169,9 @@ if st.sidebar.button("保存映射"):
             if driver_id not in SAVED_MAP[group_name]:
                 SAVED_MAP[group_name].append(driver_id)
 
+            # 3) 保存到 json
             save_group_map(SAVED_MAP)
-            st.sidebar.success(f"已保存：Driver {driver_id} → {group_name}")
+            st.sidebar.success(f"已更新：Driver {driver_id} → {group_name}（已从其他分组移除）")
 
 # =========================================================
 # 4. 异常阈值设置
