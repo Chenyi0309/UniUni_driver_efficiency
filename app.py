@@ -16,16 +16,23 @@ st.title("UniUni Driver Completion Dashboard")
 DISPLAY_GROUPS = [
     "DING DONG (3, 6)",
     "SPEEDY (2, 9, 20)",
-    "ANDY (10, 11, 17, 19)",
-    "Route 12 (12)",
+    "ANDY (10, 17, 19)",   # 去掉 11
+    "JESSICA (11)",        # 新增单独的 Route 11
+    "ULTIMILE (12)",       # Route 12 改名
 ]
 
 # 有些旧版本 json 里可能存的是不带路线号的名字，这里做一个映射转换
 INTERNAL_TO_DISPLAY = {
     "DING DONG": "DING DONG (3, 6)",
     "SPEEDY": "SPEEDY (2, 9, 20)",
-    "ANDY": "ANDY (10, 11, 17, 19)",
-    "Route 12": "Route 12 (12)",
+    "ANDY": "ANDY (10, 17, 19)",
+    "Route 12": "ULTIMILE (12)",          # 旧名映射到新名
+    "ULTIMILE": "ULTIMILE (12)",
+    "JESSICA": "JESSICA (11)",
+
+    # 兼容更老的带括号老名字
+    "ANDY (10, 11, 17, 19)": "ANDY (10, 17, 19)",
+    "Route 12 (12)": "ULTIMILE (12)",
 }
 
 # 默认：分组名（带路线号） → 司机列表
@@ -45,17 +52,19 @@ DEFAULT_GROUP_MAP = {
         # Route 20
         86492, 87043, 5000938,
     ],
-    "ANDY (10, 11, 17, 19)": [
+    "ANDY (10, 17, 19)": [
         # Route 10
         11150, 11167, 39871, 44640, 5216349,
-        # Route 11
-        44650,
         # Route 17
         11154, 5205901,
         # Route 19
         37621, 37626, 5007017, 5209368, 5215916,
     ],
-    "Route 12 (12)": [
+    "JESSICA (11)": [
+        # Route 11 单独出来
+        44650,
+    ],
+    "ULTIMILE (12)": [
         89828, 5201554, 5201598, 5201602, 5207482,
         5209676, 5210936, 5216145, 5216152,
     ],
@@ -70,7 +79,8 @@ JSON_FILE = "group_map.json"
 def load_saved_map():
     """
     从本地 json 读取你自己添加过的 driver → group 映射。
-    兼容旧版本（key 是 DING DONG/SPEEDY 这种不带路线号的）。
+    兼容旧版本（key 是 DING DONG/SPEEDY 这种不带路线号的，
+    以及更早的 ANDY (10, 11, 17, 19) / Route 12 (12) 等）。
     """
     if not os.path.exists(JSON_FILE):
         return {}
@@ -83,7 +93,7 @@ def load_saved_map():
 
     result = {}
     for raw_key, drivers in data.items():
-        # 把旧 key（不带路线号）转换成新 key（带路线号）
+        # 把旧 key 转换成新 key（带路线号/新名字）
         display_key = INTERNAL_TO_DISPLAY.get(raw_key, raw_key)
         clean_drivers = []
         for d in drivers:
@@ -241,7 +251,7 @@ def time_to_hours(x):
 
 df["inactive_hours"] = df[inactive_col].apply(time_to_hours)
 
-# 7.4 把司机映射到 4 大分组（用带路线号的名字）
+# 7.4 把司机映射到分组（用带路线号的名字）
 def assign_group(driver):
     try:
         d = int(driver)
@@ -249,7 +259,7 @@ def assign_group(driver):
         return "UNASSIGNED"
     for group_name, drivers in GROUP_MAP.items():
         if d in drivers:
-            return group_name  # group 列里直接存 "DING DONG (3, 6)" 这种
+            return group_name
     return "UNASSIGNED"
 
 
@@ -309,7 +319,7 @@ chart_group = (
     .encode(
         x=alt.X("completion_rate_pct:Q", title="Completion Rate (%)"),
         y=alt.Y(f"{driver_col}:N", sort="-x", title="Driver ID"),
-        color=alt.Color("group:N", title="Group"),  # 这里直接用带路线号的名字
+        color=alt.Color("group:N", title="Group"),
         tooltip=[
             alt.Tooltip(driver_col, title="Driver ID"),
             alt.Tooltip("group:N", title="Group"),
