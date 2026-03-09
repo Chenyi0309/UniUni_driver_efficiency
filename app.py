@@ -59,17 +59,6 @@ def normalize_dsp_name(x):
     return str(x).strip().lower()
 
 
-def pick_col(df, possible_names, fallback=None):
-    """
-    在 DataFrame 中按候选列名查找列。
-    """
-    lower_map = {str(c).strip().lower(): c for c in df.columns}
-    for name in possible_names:
-        if name.lower() in lower_map:
-            return lower_map[name.lower()]
-    return fallback
-
-
 def invert_driver_to_team_map(driver_to_team):
     """
     {driver_id: team_id} -> {team_id: [driver_ids]}
@@ -82,6 +71,28 @@ def invert_driver_to_team_map(driver_to_team):
     return result
 
 
+def find_sheet_columns(df):
+    """
+    更宽松地自动识别 Google Sheet 中的：
+    - 司机号列
+    - DSP 列
+    兼容隐藏空格、大小写、中文/英文混合
+    """
+    driver_col = None
+    dsp_col = None
+
+    for c in df.columns:
+        name = str(c).strip().lower()
+
+        if driver_col is None and ("司机" in name or "driver" in name):
+            driver_col = c
+
+        if dsp_col is None and "dsp" in name:
+            dsp_col = c
+
+    return driver_col, dsp_col
+
+
 # =========================================================
 # 2) 读取 Google Sheet（主数据源）
 # =========================================================
@@ -91,23 +102,24 @@ def load_sheet_driver_map():
     从 Google Sheet 的 DSP sheet 读取：
     司机号 + DSP 名称
     然后映射成 driver_id -> team_id
-
-    要求：
-    - Sheet 可访问（至少链接可查看）
-    - DSP sheet 中有 “司机号” 和 “DSP” 两列
     """
     try:
         sheet_df = pd.read_csv(GOOGLE_SHEET_CSV_URL)
+        source_name = "Google Sheet"
     except Exception as e:
         return {}, f"无法读取 Google Sheet：{e}"
 
+    # 统一列名
     sheet_df.columns = [str(c).strip() for c in sheet_df.columns]
 
-    driver_col = pick_col(sheet_df, ["司机号", "driver id", "driver", "driver_id"])
-    dsp_col = pick_col(sheet_df, ["dsp", "DSP"])
+    # 更宽松识别列
+    driver_col, dsp_col = find_sheet_columns(sheet_df)
 
     if driver_col is None or dsp_col is None:
-        return {}, "Google Sheet 的 DSP 页中没有找到“司机号”或“DSP”列。"
+        return {}, (
+            f"{source_name} 的 DSP 页中没有找到司机号或DSP列。"
+            f" 当前读取到的列名为：{sheet_df.columns.tolist()}"
+        )
 
     temp = sheet_df[[driver_col, dsp_col]].copy()
     temp[driver_col] = pd.to_numeric(temp[driver_col], errors="coerce")
@@ -162,8 +174,8 @@ SHEET_DRIVER_MAP, SHEET_ERROR = load_sheet_driver_map()
 LOCAL_DRIVER_MAP = load_local_driver_map()
 
 # 最终规则：
-# 1) 先用本地补充映射（可覆盖）
-# 2) 再用 Google Sheet 主表
+# 1) 先用 Google Sheet 主表
+# 2) 再用本地补充映射覆盖
 FINAL_DRIVER_MAP = SHEET_DRIVER_MAP.copy()
 FINAL_DRIVER_MAP.update(LOCAL_DRIVER_MAP)
 
