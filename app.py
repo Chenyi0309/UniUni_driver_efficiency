@@ -12,7 +12,7 @@ st.set_page_config(page_title="UniUni Driver Completion Dashboard", layout="wide
 st.title("UniUni Driver Completion Dashboard")
 
 # =========================================================
-# 0) Team ID → Group（你最新的最终规则）
+# 0) 配置
 # =========================================================
 TEAM_ID_TO_GROUP = {
     849: "ANDY (10, 17, 19)",
@@ -22,7 +22,6 @@ TEAM_ID_TO_GROUP = {
     1337: "TJ (11)",
 }
 
-# Sidebar 下拉显示（公司 + Team ID + Route）
 DISPLAY_GROUPS = {
     "ANDY (Team 849 | Routes 10, 17, 19)": [849],
     "ULTIMILE (Team 853 | Route 12)": [853],
@@ -31,31 +30,148 @@ DISPLAY_GROUPS = {
     "TJ (Team 1337 | Route 11)": [1337],
 }
 
+# Google Sheet: DSP 这一页
+GOOGLE_SHEET_CSV_URL = (
+    "https://docs.google.com/spreadsheets/d/"
+    "1NhgYseeXp20uYjopelAsQPM2yZDvJr59pDLpJZNPQyg/"
+    "export?format=csv&gid=1824066025"
+)
+
+# DSP 名称 -> Team ID
+DSP_NAME_TO_TEAM_ID = {
+    "andy": 849,
+    "dingdong": 600,
+    "ding dong": 600,
+    "speedy": 369,
+    "tj": 1337,
+    "ultimile": 853,
+}
+
 JSON_FILE = "driver_team_map.json"
 
+
 # =========================================================
-# 1) 加载 / 保存：Team ID → [Driver IDs]
+# 1) 工具函数
 # =========================================================
-def load_saved_map():
+def normalize_dsp_name(x):
+    if pd.isna(x):
+        return ""
+    return str(x).strip().lower()
+
+
+def pick_col(df, possible_names, fallback=None):
+    """
+    在 DataFrame 中按候选列名查找列。
+    """
+    lower_map = {str(c).strip().lower(): c for c in df.columns}
+    for name in possible_names:
+        if name.lower() in lower_map:
+            return lower_map[name.lower()]
+    return fallback
+
+
+def invert_driver_to_team_map(driver_to_team):
+    """
+    {driver_id: team_id} -> {team_id: [driver_ids]}
+    """
+    result = {}
+    for driver_id, team_id in driver_to_team.items():
+        result.setdefault(int(team_id), []).append(int(driver_id))
+    for k in result:
+        result[k] = sorted(list(set(result[k])))
+    return result
+
+
+# =========================================================
+# 2) 读取 Google Sheet（主数据源）
+# =========================================================
+@st.cache_data(ttl=300)
+def load_sheet_driver_map():
+    """
+    从 Google Sheet 的 DSP sheet 读取：
+    司机号 + DSP 名称
+    然后映射成 driver_id -> team_id
+
+    要求：
+    - Sheet 可访问（至少链接可查看）
+    - DSP sheet 中有 “司机号” 和 “DSP” 两列
+    """
+    try:
+        sheet_df = pd.read_csv(GOOGLE_SHEET_CSV_URL)
+    except Exception as e:
+        return {}, f"无法读取 Google Sheet：{e}"
+
+    sheet_df.columns = [str(c).strip() for c in sheet_df.columns]
+
+    driver_col = pick_col(sheet_df, ["司机号", "driver id", "driver", "driver_id"])
+    dsp_col = pick_col(sheet_df, ["dsp", "DSP"])
+
+    if driver_col is None or dsp_col is None:
+        return {}, "Google Sheet 的 DSP 页中没有找到“司机号”或“DSP”列。"
+
+    temp = sheet_df[[driver_col, dsp_col]].copy()
+    temp[driver_col] = pd.to_numeric(temp[driver_col], errors="coerce")
+    temp = temp.dropna(subset=[driver_col])
+
+    temp["team_id"] = temp[dsp_col].apply(
+        lambda x: DSP_NAME_TO_TEAM_ID.get(normalize_dsp_name(x), np.nan)
+    )
+    temp = temp.dropna(subset=["team_id"])
+
+    driver_to_team = {}
+    for _, row in temp.iterrows():
+        driver_id = int(row[driver_col])
+        team_id = int(row["team_id"])
+        driver_to_team[driver_id] = team_id
+
+    return driver_to_team, None
+
+
+# =========================================================
+# 3) 读取 / 保存 本地补充映射（长期补充层）
+# =========================================================
+def load_local_driver_map():
+    """
+    本地 JSON 存的是 driver_id -> team_id
+    """
     if not os.path.exists(JSON_FILE):
         return {}
+
     try:
-        with open(JSON_FILE, "r") as f:
+        with open(JSON_FILE, "r", encoding="utf-8") as f:
             data = json.load(f)
-        # json: { "849": [11155, ...], "600": [...] }
-        return {int(k): [int(x) for x in v] for k, v in data.items()}
+
+        result = {}
+        for k, v in data.items():
+            try:
+                result[int(k)] = int(v)
+            except Exception:
+                continue
+        return result
     except Exception:
         return {}
 
-def save_group_map(group_map):
-    serializable = {str(k): [int(x) for x in v] for k, v in group_map.items()}
-    with open(JSON_FILE, "w") as f:
-        json.dump(serializable, f, indent=4)
 
-SAVED_MAP = load_saved_map()
+def save_local_driver_map(driver_map):
+    serializable = {str(k): int(v) for k, v in driver_map.items()}
+    with open(JSON_FILE, "w", encoding="utf-8") as f:
+        json.dump(serializable, f, indent=4, ensure_ascii=False)
+
+
+SHEET_DRIVER_MAP, SHEET_ERROR = load_sheet_driver_map()
+LOCAL_DRIVER_MAP = load_local_driver_map()
+
+# 最终规则：
+# 1) 先用本地补充映射（可覆盖）
+# 2) 再用 Google Sheet 主表
+FINAL_DRIVER_MAP = SHEET_DRIVER_MAP.copy()
+FINAL_DRIVER_MAP.update(LOCAL_DRIVER_MAP)
+
+FINAL_TEAM_MAP = invert_driver_to_team_map(FINAL_DRIVER_MAP)
+
 
 # =========================================================
-# 2) Sidebar：批量添加 Driver → Team（支持覆盖）
+# 4) Sidebar：批量添加 Driver → Team（保存到本地 JSON）
 # =========================================================
 st.sidebar.subheader("添加新的 Driver → 分类（可批量）")
 
@@ -74,7 +190,6 @@ if st.sidebar.button("保存映射"):
         st.sidebar.error("请至少输入一个 Driver ID")
         st.stop()
 
-    # 解析 Driver IDs
     raw_ids = raw_driver_input.replace(",", " ").split()
     try:
         driver_ids = [int(x) for x in raw_ids]
@@ -84,26 +199,30 @@ if st.sidebar.button("保存映射"):
 
     target_team_id = DISPLAY_GROUPS[selected_group_label][0]
 
-    # 覆盖旧记录：先从所有 team 中移除这些司机
-    for team_id in list(SAVED_MAP.keys()):
-        SAVED_MAP[team_id] = [d for d in SAVED_MAP[team_id] if d not in driver_ids]
-        if not SAVED_MAP[team_id]:
-            del SAVED_MAP[team_id]
-
-    # 加入目标 team
-    SAVED_MAP.setdefault(target_team_id, [])
+    # 更新本地补充映射：driver_id -> team_id
     for d in driver_ids:
-        if d not in SAVED_MAP[target_team_id]:
-            SAVED_MAP[target_team_id].append(d)
+        LOCAL_DRIVER_MAP[int(d)] = int(target_team_id)
 
-    save_group_map(SAVED_MAP)
-    st.sidebar.success(f"已保存 {len(driver_ids)} 个司机 → Team {target_team_id}")
+    save_local_driver_map(LOCAL_DRIVER_MAP)
+
+    st.sidebar.success(
+        f"已保存 {len(driver_ids)} 个司机到本地补充映射 → Team {target_team_id}"
+    )
+    st.sidebar.info("刷新后会优先使用你刚刚保存的本地映射。")
 
 st.sidebar.markdown("---")
-st.sidebar.caption("提示：输错了直接再输一次并保存，会自动覆盖到新 Team。")
+st.sidebar.caption("说明：Google Sheet 是主表；你在这里新增的司机会保存到本地 JSON，并优先覆盖主表。")
+
+if SHEET_ERROR:
+    st.sidebar.warning(SHEET_ERROR)
+else:
+    st.sidebar.success(f"已读取 Google Sheet 主表司机数：{len(SHEET_DRIVER_MAP)}")
+
+st.sidebar.write(f"本地补充司机数：{len(LOCAL_DRIVER_MAP)}")
+
 
 # =========================================================
-# 3) 异常阈值
+# 5) 异常阈值
 # =========================================================
 st.sidebar.header("异常司机阈值")
 
@@ -117,8 +236,9 @@ inactive_hours_threshold = st.sidebar.slider(
     min_value=0.5, max_value=24.0, value=3.0, step=0.5
 )
 
+
 # =========================================================
-# 4) 上传 Excel / CSV
+# 6) 上传 Excel / CSV
 # =========================================================
 uploaded_file = st.file_uploader(
     "上传 Delivery Monitoring 导出的 Excel（xlsx）或 CSV",
@@ -136,23 +256,29 @@ else:
 
 df.columns = [str(c).strip() for c in df.columns]
 
+
 # =========================================================
-# 5) 自动识别关键列（更稳健一点）
+# 7) 自动识别关键列
 # =========================================================
-def pick_col(candidates, fallback_idx=None):
-    return candidates[0] if candidates else (df.columns[fallback_idx] if fallback_idx is not None else df.columns[0])
+def pick_runtime_col(candidates, fallback_idx=None):
+    return candidates[0] if candidates else (
+        df.columns[fallback_idx] if fallback_idx is not None else df.columns[0]
+    )
 
 driver_candidates = [c for c in df.columns if "driver" in c.lower()]
-driver_col = pick_col(driver_candidates, 0)
+driver_col = pick_runtime_col(driver_candidates, 0)
 
-tbd_candidates = [c for c in df.columns if ("to be" in c.lower()) or ("delivered/total" in c.lower()) or ("tobe/total" in c.lower())]
-tbd_col = pick_col(tbd_candidates, -5)
+tbd_candidates = [
+    c for c in df.columns
+    if ("to be" in c.lower()) or ("delivered/total" in c.lower()) or ("tobe/total" in c.lower())
+]
+tbd_col = pick_runtime_col(tbd_candidates, -5)
 
 comp_candidates = [c for c in df.columns if "completion" in c.lower()]
-comp_col = pick_col(comp_candidates, -4)
+comp_col = pick_runtime_col(comp_candidates, -4)
 
 inactive_candidates = [c for c in df.columns if "inactive" in c.lower()]
-inactive_col = pick_col(inactive_candidates, -1)
+inactive_col = pick_runtime_col(inactive_candidates, -1)
 
 st.subheader("原始数据预览")
 st.write(
@@ -160,22 +286,21 @@ st.write(
 )
 st.dataframe(df.head(20), use_container_width=True)
 
+
 # =========================================================
-# 6) 字段解析
+# 8) 字段解析
 # =========================================================
-# 6.1 To be delivered / Total
 split = df[tbd_col].astype(str).str.split("/", expand=True)
 df["to_be"] = pd.to_numeric(split[0], errors="coerce").fillna(0).astype(int)
 df["total"] = pd.to_numeric(split[1], errors="coerce").fillna(0).astype(int)
 df["delivered"] = (df["total"] - df["to_be"]).clip(lower=0)
 
-# 6.2 Completion
 df["completion"] = (
     df[comp_col].astype(str).str.strip().str.rstrip("%").replace("", np.nan)
 )
 df["completion"] = pd.to_numeric(df["completion"], errors="coerce")
 
-# 6.3 Inactive -> hours
+
 def time_to_hours(x):
     s = str(x).strip()
     if ":" not in s:
@@ -189,10 +314,12 @@ def time_to_hours(x):
     except Exception:
         return np.nan
 
+
 df["inactive_hours"] = df[inactive_col].apply(time_to_hours)
 
+
 # =========================================================
-# 7) Driver → Team → Group（核心）
+# 9) Driver → Team → Group（核心）
 # =========================================================
 def assign_group(driver_id):
     try:
@@ -200,15 +327,18 @@ def assign_group(driver_id):
     except Exception:
         return "UNASSIGNED"
 
-    for team_id, drivers in SAVED_MAP.items():
-        if d in drivers:
-            return TEAM_ID_TO_GROUP.get(team_id, "UNASSIGNED")
-    return "UNASSIGNED"
+    team_id = FINAL_DRIVER_MAP.get(d)
+    if team_id is None:
+        return "UNASSIGNED"
+
+    return TEAM_ID_TO_GROUP.get(team_id, "UNASSIGNED")
+
 
 df["group"] = df[driver_col].apply(assign_group)
 
+
 # =========================================================
-# 8) 汇总到司机层级
+# 10) 汇总到司机层级
 # =========================================================
 driver_group = (
     df.groupby([driver_col, "group"], as_index=False)
@@ -221,6 +351,7 @@ driver_group = (
       )
 )
 
+
 def hours_to_hms(h):
     if pd.isna(h):
         return "N/A"
@@ -232,10 +363,12 @@ def hours_to_hms(h):
     S = total_seconds % 60
     return f"{H}h {M}m {S}s"
 
+
 driver_group["inactive_time_str"] = driver_group["inactive_hours"].apply(hours_to_hms)
 
+
 # =========================================================
-# 9) 总体完成情况
+# 11) 总体完成情况
 # =========================================================
 st.subheader("总体完成情况")
 c1, c2, c3 = st.columns(3)
@@ -249,8 +382,9 @@ c1.metric("Overall Completion Rate", f"{overall_completion * 100:.1f}%")
 c2.metric("Total Packages", total_pkg)
 c3.metric("Remaining Packages", remaining_pkg)
 
+
 # =========================================================
-# 10) 图表：按公司着色的完成率
+# 12) 图表：按公司着色的完成率
 # =========================================================
 st.subheader("按司机完成率（按公司着色）")
 
@@ -276,8 +410,9 @@ chart = (
 
 st.altair_chart(chart, use_container_width=True)
 
+
 # =========================================================
-# 11) 异常司机
+# 13) 异常司机
 # =========================================================
 st.subheader("异常司机（Inactive 过长 & 完成率偏低）")
 
@@ -302,11 +437,29 @@ else:
         use_container_width=True,
     )
 
+
 # =========================================================
-# 12) 可选：提示未被映射的司机
+# 14) 提示未映射司机
 # =========================================================
 unassigned = driver_group[driver_group["group"] == "UNASSIGNED"]
 if not unassigned.empty:
     st.info(f"提示：有 {len(unassigned)} 个司机未映射到任何 Team/Group（显示为 UNASSIGNED）。")
-    st.dataframe(unassigned[[driver_col, "completion_rate_pct", "inactive_time_str", "delivered", "to_be", "total"]],
-                 use_container_width=True)
+    st.dataframe(
+        unassigned[
+            [driver_col, "completion_rate_pct", "inactive_time_str", "delivered", "to_be", "total"]
+        ],
+        use_container_width=True
+    )
+
+
+# =========================================================
+# 15) 当前映射预览（可选）
+# =========================================================
+with st.expander("查看当前主表 + 本地补充后的司机映射"):
+    mapping_preview = pd.DataFrame({
+        "driver_id": list(FINAL_DRIVER_MAP.keys()),
+        "team_id": list(FINAL_DRIVER_MAP.values())
+    }).sort_values(["team_id", "driver_id"])
+
+    mapping_preview["group"] = mapping_preview["team_id"].map(TEAM_ID_TO_GROUP)
+    st.dataframe(mapping_preview, use_container_width=True)
