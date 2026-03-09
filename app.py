@@ -32,9 +32,7 @@ DISPLAY_GROUPS = {
 
 # Google Sheet: DSP 这一页
 GOOGLE_SHEET_CSV_URL = (
-    "https://docs.google.com/spreadsheets/d/"
-    "1NhgYseeXp20uYjopelAsQPM2yZDvJr59pDLpJZNPQyg/"
-    "export?format=csv&gid=1824066025"
+    "https://docs.google.com/spreadsheets/d/1NhgYseeXp20uYjopelAsQPM2yZDvJr59pDLpJZNPQyg/edit?usp=sharing"
 )
 
 # DSP 名称 -> Team ID
